@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 
+/**
+ * z.ai MCP Server
+ * 
+ * A Model Context Protocol (MCP) server that integrates with z.ai API.
+ * Provides tools for chat completion, search, and summarization.
+ * 
+ * @author Richard Hewitt
+ * @license MIT
+ */
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -9,123 +19,72 @@ import {
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 
+// Load environment variables
 dotenv.config();
 
 /**
- * Z.AI API Configuration
- * @constant {string} ZAI_API_KEY - API key from environment variables
- * @constant {string} ZAI_API_BASE - Base URL for z.ai API
+ * Configuration for z.ai API
  */
-const ZAI_API_KEY = process.env.ZAI_API_KEY;
-const ZAI_API_BASE = process.env.ZAI_API_BASE || 'https://api.z.ai/v1';
+const ZAI_CONFIG = {
+  apiKey: process.env.ZAI_API_KEY,
+  baseUrl: process.env.ZAI_BASE_URL || 'https://api.z.ai',
+  model: process.env.ZAI_MODEL || 'claude-3-sonnet-20240229',
+  maxTokens: parseInt(process.env.ZAI_MAX_TOKENS || '4000', 10),
+  temperature: parseFloat(process.env.ZAI_TEMPERATURE || '0.7'),
+};
 
 /**
- * Validates that required environment variables are set
- * @throws {Error} If ZAI_API_KEY is not configured
+ * Validates that required configuration is present
+ * @throws {Error} If required configuration is missing
  */
-function validateEnvironment() {
-  if (!ZAI_API_KEY) {
+function validateConfig() {
+  if (!ZAI_CONFIG.apiKey) {
     throw new Error('ZAI_API_KEY environment variable is required');
   }
 }
 
 /**
  * Makes an authenticated request to the z.ai API
+ * 
  * @param {string} endpoint - API endpoint path
- * @param {Object} options - Fetch options
- * @returns {Promise<Object>} API response data
+ * @param {object} data - Request payload
+ * @returns {Promise<any>} API response
  * @throws {Error} If the API request fails
  */
-async function makeZaiRequest(endpoint, options = {}) {
-  const url = `${ZAI_API_BASE}${endpoint}`;
+async function zaiApiRequest(endpoint, data) {
+  const url = `${ZAI_CONFIG.baseUrl}${endpoint}`;
   
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${ZAI_API_KEY}`,
-      ...options.headers,
-    },
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ZAI_CONFIG.apiKey}`,
+      },
+      body: JSON.stringify(data),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Z.AI API error (${response.status}): ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`z.ai API error (${response.status}): ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error.message.includes('z.ai API error')) {
+      throw error;
+    }
+    throw new Error(`Failed to connect to z.ai API: ${error.message}`);
   }
-
-  return await response.json();
-}
-
-/**
- * Sends a chat message to z.ai and returns the response
- * @param {string} message - The user's message
- * @param {Array<Object>} [history] - Optional conversation history
- * @param {Object} [options] - Additional options (temperature, max_tokens, etc.)
- * @returns {Promise<Object>} Chat completion response
- */
-async function zaiChat(message, history = [], options = {}) {
-  const messages = [
-    ...history,
-    { role: 'user', content: message }
-  ];
-
-  const payload = {
-    messages,
-    temperature: options.temperature || 0.7,
-    max_tokens: options.max_tokens || 2000,
-    ...options,
-  };
-
-  return await makeZaiRequest('/chat/completions', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-/**
- * Performs a search using z.ai's search capabilities
- * @param {string} query - Search query
- * @param {Object} [options] - Search options (max_results, filter, etc.)
- * @returns {Promise<Object>} Search results
- */
-async function zaiSearch(query, options = {}) {
-  const payload = {
-    query,
-    max_results: options.max_results || 10,
-    ...options,
-  };
-
-  return await makeZaiRequest('/search', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-/**
- * Summarizes text using z.ai
- * @param {string} text - Text to summarize
- * @param {Object} [options] - Summarization options (length, style, etc.)
- * @returns {Promise<Object>} Summarization result
- */
-async function zaiSummarize(text, options = {}) {
-  const payload = {
-    text,
-    length: options.length || 'medium',
-    style: options.style || 'concise',
-    ...options,
-  };
-
-  return await makeZaiRequest('/summarize', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
 }
 
 /**
  * Creates and configures the MCP server
  * @returns {Server} Configured MCP server instance
  */
-function createServer() {
+export function createMCPServer() {
+  validateConfig();
+
   const server = new Server(
     {
       name: 'zai-mcp-server',
@@ -146,7 +105,7 @@ function createServer() {
       tools: [
         {
           name: 'zai_chat',
-          description: 'Send a message to z.ai chat API and get a response. Supports conversation history and various options.',
+          description: 'Send a message to z.ai chat API and receive a response. Supports multi-turn conversations with context.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -154,27 +113,36 @@ function createServer() {
                 type: 'string',
                 description: 'The message to send to z.ai',
               },
-              history: {
+              system: {
+                type: 'string',
+                description: 'Optional system prompt to set context or behavior',
+              },
+              conversationHistory: {
                 type: 'array',
-                description: 'Optional conversation history as array of {role, content} objects',
+                description: 'Optional conversation history for context',
                 items: {
                   type: 'object',
                   properties: {
-                    role: { type: 'string', enum: ['user', 'assistant', 'system'] },
-                    content: { type: 'string' },
+                    role: {
+                      type: 'string',
+                      enum: ['user', 'assistant'],
+                    },
+                    content: {
+                      type: 'string',
+                    },
                   },
-                  required: ['role', 'content'],
                 },
               },
               temperature: {
                 type: 'number',
-                description: 'Sampling temperature (0.0 to 2.0). Higher values make output more random.',
+                description: 'Optional temperature (0.0-1.0) for response randomness',
                 minimum: 0,
-                maximum: 2,
+                maximum: 1,
               },
-              max_tokens: {
+              maxTokens: {
                 type: 'number',
-                description: 'Maximum number of tokens to generate',
+                description: 'Optional maximum tokens for the response',
+                minimum: 1,
               },
             },
             required: ['message'],
@@ -182,23 +150,36 @@ function createServer() {
         },
         {
           name: 'zai_search',
-          description: 'Search using z.ai search capabilities. Returns relevant results based on the query.',
+          description: 'Search using z.ai search capabilities. Retrieves relevant information from the web or knowledge base.',
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: 'Search query',
+                description: 'The search query',
               },
-              max_results: {
+              maxResults: {
                 type: 'number',
                 description: 'Maximum number of results to return (default: 10)',
                 minimum: 1,
-                maximum: 100,
+                maximum: 50,
               },
-              filter: {
+              filters: {
                 type: 'object',
-                description: 'Optional filters to apply to search results',
+                description: 'Optional filters for the search (e.g., date range, domain)',
+                properties: {
+                  dateRange: {
+                    type: 'string',
+                    description: 'Date range filter (e.g., "last_week", "last_month")',
+                  },
+                  domains: {
+                    type: 'array',
+                    description: 'Specific domains to search within',
+                    items: {
+                      type: 'string',
+                    },
+                  },
+                },
               },
             },
             required: ['query'],
@@ -206,23 +187,23 @@ function createServer() {
         },
         {
           name: 'zai_summarize',
-          description: 'Summarize text using z.ai. Supports different summary lengths and styles.',
+          description: 'Summarize text using z.ai. Condenses long content into concise summaries.',
           inputSchema: {
             type: 'object',
             properties: {
               text: {
                 type: 'string',
-                description: 'Text to summarize',
+                description: 'The text to summarize',
               },
               length: {
                 type: 'string',
-                description: 'Summary length: short, medium, or long (default: medium)',
+                description: 'Desired summary length',
                 enum: ['short', 'medium', 'long'],
               },
               style: {
                 type: 'string',
-                description: 'Summary style: concise, detailed, or bullet-points (default: concise)',
-                enum: ['concise', 'detailed', 'bullet-points'],
+                description: 'Summary style',
+                enum: ['bullet_points', 'paragraph', 'key_points'],
               },
             },
             required: ['text'],
@@ -236,57 +217,97 @@ function createServer() {
    * Handler for tool execution
    */
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    try {
-      const { name, arguments: args } = request.params;
+    const { name, arguments: args } = request.params;
 
+    try {
       switch (name) {
         case 'zai_chat': {
-          const result = await zaiChat(
-            args.message,
-            args.history || [],
-            {
-              temperature: args.temperature,
-              max_tokens: args.max_tokens,
-            }
-          );
+          const messages = [];
+          
+          // Add system message if provided
+          if (args.system) {
+            messages.push({
+              role: 'system',
+              content: args.system,
+            });
+          }
+
+          // Add conversation history if provided
+          if (args.conversationHistory && Array.isArray(args.conversationHistory)) {
+            messages.push(...args.conversationHistory);
+          }
+
+          // Add current message
+          messages.push({
+            role: 'user',
+            content: args.message,
+          });
+
+          const response = await zaiApiRequest('/v1/chat/completions', {
+            model: ZAI_CONFIG.model,
+            messages,
+            max_tokens: args.maxTokens || ZAI_CONFIG.maxTokens,
+            temperature: args.temperature ?? ZAI_CONFIG.temperature,
+          });
 
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(result, null, 2),
+                text: JSON.stringify({
+                  response: response.choices[0].message.content,
+                  usage: response.usage,
+                  model: response.model,
+                }, null, 2),
               },
             ],
           };
         }
 
         case 'zai_search': {
-          const result = await zaiSearch(args.query, {
-            max_results: args.max_results,
-            filter: args.filter,
-          });
+          const searchData = {
+            query: args.query,
+            max_results: args.maxResults || 10,
+          };
+
+          if (args.filters) {
+            searchData.filters = args.filters;
+          }
+
+          const response = await zaiApiRequest('/v1/search', searchData);
 
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(result, null, 2),
+                text: JSON.stringify({
+                  results: response.results,
+                  count: response.results?.length || 0,
+                  query: args.query,
+                }, null, 2),
               },
             ],
           };
         }
 
         case 'zai_summarize': {
-          const result = await zaiSummarize(args.text, {
-            length: args.length,
-            style: args.style,
-          });
+          const summarizeData = {
+            text: args.text,
+            length: args.length || 'medium',
+            style: args.style || 'paragraph',
+          };
+
+          const response = await zaiApiRequest('/v1/summarize', summarizeData);
 
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(result, null, 2),
+                text: JSON.stringify({
+                  summary: response.summary,
+                  original_length: args.text.length,
+                  summary_length: response.summary?.length || 0,
+                }, null, 2),
               },
             ],
           };
@@ -300,7 +321,7 @@ function createServer() {
         content: [
           {
             type: 'text',
-            text: `Error: ${error.message}`,
+            text: `Error executing ${name}: ${error.message}`,
           },
         ],
         isError: true,
@@ -312,26 +333,21 @@ function createServer() {
 }
 
 /**
- * Main function to start the MCP server
+ * Main entry point for running the server via stdio
  */
 async function main() {
   try {
-    validateEnvironment();
-
-    const server = createServer();
+    const server = createMCPServer();
     const transport = new StdioServerTransport();
-
     await server.connect(transport);
-
-    console.error('Z.AI MCP Server running on stdio');
+    console.error('z.ai MCP Server running on stdio');
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('Failed to start server:', error.message);
     process.exit(1);
   }
 }
 
-// Start the server
-main();
-
-// Export for Netlify functions
-export { createServer, zaiChat, zaiSearch, zaiSummarize, makeZaiRequest };
+// Run the server if this is the main module
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}
