@@ -70,6 +70,13 @@ Summarize text using z.ai.
 
 ## Configuration
 
+### Official Z.ai MCP servers
+
+Run the official Web Search, Web Reader, Zread and vision servers alongside
+the custom tools. See [Official MCP servers](docs/official-mcp-servers.md)
+for configuration, coverage, privacy requirements and the month-long search rollout.
+Custom chat and summarization remain available.
+
 ### Environment Variables
 
 **Required:**
@@ -80,6 +87,9 @@ Summarize text using z.ai.
 - `ZAI_MODEL`: Default model (default: claude-3-sonnet-20240229)
 - `ZAI_MAX_TOKENS`: Default max tokens (default: 4000)
 - `ZAI_TEMPERATURE`: Default temperature (default: 0.7)
+- `ZAI_DISABLE_CUSTOM_SEARCH`: Set to exactly `true` to omit `zai_search` from
+  tool discovery and reject calls with guidance to use the official `webSearchPrime`
+  server. Defaults to off; restart the server (or redeploy Netlify) after changing it.
 
 ## Integration with Poke
 
