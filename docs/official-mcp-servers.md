@@ -112,8 +112,9 @@ use your client's secure configuration mechanism.
 3. After the comparison, decide whether to retire `zai_search` in a separate
    change. Keep `zai_chat` and `zai_summarize` until replacements are evaluated.
 
-This rollout does not repair the existing Netlify SSE `handleRequest` bug in
-the custom server. The official remote services are configured independently.
+The custom Netlify endpoint uses stateless Streamable HTTP and requires its own
+`MCP_AUTH_TOKEN` bearer token (see the README). The official remote services are
+configured independently and use Coding Plan API keys instead.
 
 ## Sources
 

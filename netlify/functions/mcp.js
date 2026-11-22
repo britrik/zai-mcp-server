@@ -1,42 +1,65 @@
-/**
- * Netlify Serverless Function for z.ai MCP Server
- * 
- * This function wraps the MCP server for deployment on Netlify,
- * enabling server-side execution of z.ai API requests.
- */
-
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createMCPServer } from '../../index.js';
 
-/**
- * Netlify function handler
- * 
- * @param {Object} event - Netlify event object
- * @param {Object} context - Netlify context object
- * @returns {Promise<Object>} HTTP response
- */
-export const handler = async (event, context) => {
+export const config = { path: '/mcp' };
+
+const headers = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, MCP-Protocol-Version',
+  'Cache-Control': 'no-store',
+};
+
+function errorResponse(status, message, extraHeaders = {}) {
+  return Response.json({
+    jsonrpc: '2.0',
+    id: null,
+    error: { code: -32000, message },
+  }, { status, headers: { ...headers, ...extraHeaders } });
+}
+
+export default async function handler(req) {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers });
+  }
+
+  const token = process.env.MCP_AUTH_TOKEN;
+  if (!token) {
+    return errorResponse(500, 'Server configuration error: MCP_AUTH_TOKEN is required');
+  }
+
+  const authorization = req.headers.get('Authorization') || '';
+  const digest = (value) => createHash('sha256').update(value).digest();
+  if (!timingSafeEqual(digest(authorization), digest(`Bearer ${token}`))) {
+    return errorResponse(401, 'Unauthorized', { 'WWW-Authenticate': 'Bearer' });
+  }
+
+  if (req.method !== 'POST') {
+    return errorResponse(405, 'Method not allowed', { Allow: 'POST, OPTIONS' });
+  }
+
+  const server = createMCPServer();
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
   try {
-    // Create MCP server instance
-    const server = createMCPServer();
-    
-    // Create SSE transport for HTTP requests
-    const transport = new SSEServerTransport('/mcp', server);
-    
-    // Handle the request
-    return await transport.handleRequest(event, context);
+    await server.connect(transport);
+    const response = await transport.handleRequest(req);
+    const body = await response.arrayBuffer();
+    const responseHeaders = new Headers(response.headers);
+    for (const [name, value] of Object.entries(headers)) {
+      responseHeaders.set(name, value);
+    }
+    return new Response(response.status === 202 || response.status === 204 ? null : body, {
+      status: response.status,
+      headers: responseHeaders,
+    });
   } catch (error) {
     console.error('MCP function error:', error);
-    
-    return {
-      statusCode: 500,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        error: 'Internal server error',
-        message: error.message,
-      }),
-    };
+    return errorResponse(500, 'Internal server error');
+  } finally {
+    await server.close();
   }
-};
+}

@@ -7,7 +7,7 @@ A Model Context Protocol (MCP) server that integrates with z.ai API, designed fo
 - **Chat Completion**: Conversational AI with z.ai's models
 - **Search**: Semantic search capabilities using z.ai
 - **Summarization**: Text summarization with customizable styles
-- **Netlify Ready**: Serverless deployment with SSE transport
+- **Netlify Ready**: Authenticated, stateless Streamable HTTP deployment
 - **Production Ready**: Error handling, validation, and environment configuration
 
 ## Quick Start
@@ -18,6 +18,7 @@ A Model Context Protocol (MCP) server that integrates with z.ai API, designed fo
 2. Connect your repository to Netlify
 3. Set environment variables in Netlify dashboard:
    - `ZAI_API_KEY`: Your z.ai API key
+   - `MCP_AUTH_TOKEN`: A strong random secret required for callers of `/mcp`
    - `ZAI_BASE_URL`: (Optional) Custom API base URL
    - `ZAI_MODEL`: (Optional) Default model to use
 
@@ -139,13 +140,50 @@ This repository is configured for automatic deployment on Netlify:
 3. **Environment Variables**: Configure in Netlify dashboard under Site Settings → Environment Variables
 4. **Custom Domain**: Optional - set up a custom domain in Netlify
 
+The Functions v2 handler maps directly to `/mcp` using `config.path`; no redirect
+is needed. Each POST creates a fresh server and transport, returns JSON, and
+closes them after the response. There are no session IDs or persistent SSE
+connections. GET and DELETE return 405 after authentication. OPTIONS preflight
+does not require authentication.
+
+Set `MCP_AUTH_TOKEN` in Netlify's function environment to a strong random secret
+(for example, generate one with `openssl rand -hex 32`). This token authenticates
+your MCP clients; it is **not** your upstream `ZAI_API_KEY` or an official-server
+Coding Plan key. Without it the function fails closed with a configuration error
+(500); missing or incorrect bearer credentials return 401. Local stdio does not
+require `MCP_AUTH_TOKEN`. Never commit real tokens.
+
+Connect using a Streamable HTTP-capable client, for example this Claude Code-style
+configuration (replace the placeholder securely in your client configuration):
+
+```json
+{
+  "mcpServers": {
+    "custom-zai": {
+      "type": "http",
+      "url": "https://your-site.netlify.app/mcp",
+      "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN>" }
+    }
+  }
+}
+```
+
 ### Testing Your Deployment
 
 After deployment, test your MCP server:
 
 ```bash
-curl https://your-site.netlify.app/mcp
+curl https://your-site.netlify.app/mcp \
+  -H "Authorization: Bearer ${MCP_AUTH_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0.0"}}}'
 ```
+
+Export `MCP_AUTH_TOKEN` in your shell first using the same secret configured in
+Netlify. The response should contain the server's capabilities and no
+`Mcp-Session-Id` header. Send `tools/list` in a separate authenticated POST;
+stateless requests do not need a session from the initialization response.
 
 ## Usage Examples
 
