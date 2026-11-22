@@ -29,9 +29,9 @@ export default async function handler(req) {
     return errorResponse(500, 'Server configuration error: MCP_AUTH_TOKEN is required');
   }
 
-  const authorization = req.headers.get('Authorization') || '';
+  const match = /^Bearer +(\S+) *$/i.exec(req.headers.get('Authorization') || '');
   const digest = (value) => createHash('sha256').update(value).digest();
-  if (!timingSafeEqual(digest(authorization), digest(`Bearer ${token}`))) {
+  if (!match || !timingSafeEqual(digest(match[1]), digest(token))) {
     return errorResponse(401, 'Unauthorized', { 'WWW-Authenticate': 'Bearer' });
   }
 

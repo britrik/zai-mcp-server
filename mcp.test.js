@@ -129,3 +129,10 @@ test('malformed JSON receives a protocol error', async () => {
   assert.equal(response.status, 400);
   assert.equal((await response.json()).error.code, -32700);
 });
+
+for (const authorization of [`bearer ${token}`, `BEARER   ${token}`, `Bearer ${token} `]) {
+  test(`accepts case-insensitive scheme and extra spaces: ${JSON.stringify(authorization)}`, async () => {
+    const response = await handler(request({ authorization }));
+    assert.equal(response.status, 200);
+  });
+}
