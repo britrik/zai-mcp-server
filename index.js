@@ -85,6 +85,7 @@ async function makeZaiRequest(endpoint, data) {
  * @returns {Server} Configured MCP server instance
  */
 export function createMCPServer() {
+  const disableCustomSearch = process.env.ZAI_DISABLE_CUSTOM_SEARCH === 'true';
   const server = new Server(
     {
       name: 'zai-mcp-server',
@@ -175,7 +176,7 @@ export function createMCPServer() {
             required: ['text'],
           },
         },
-      ],
+      ].filter((tool) => !disableCustomSearch || tool.name !== 'zai_search'),
     };
   });
 
@@ -184,9 +185,13 @@ export function createMCPServer() {
    */
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
-      validateConfig();
-
       const { name, arguments: args } = request.params;
+
+      if (disableCustomSearch && name === 'zai_search') {
+        throw new Error('Custom zai_search is disabled. Use the official webSearchPrime server instead.');
+      }
+
+      validateConfig();
 
       switch (name) {
         case 'zai_chat': {
